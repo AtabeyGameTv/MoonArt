@@ -1,0 +1,203 @@
+{
+  "entities": {
+    "UserArtwork": {
+      "title": "UserArtwork",
+      "description": "A private drawing saved by an authenticated MoonArt user in their personal gallery.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the user who created and owns this artwork."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display title of the artwork."
+        },
+        "imageDataUrl": {
+          "type": "string",
+          "minLength": 22,
+          "maxLength": 750000,
+          "description": "Compressed PNG/WebP/JPEG data URL of the artwork fitting safely within Firestore document limits."
+        },
+        "width": {
+          "type": "integer",
+          "description": "Original canvas width in pixels."
+        },
+        "height": {
+          "type": "integer",
+          "description": "Original canvas height in pixels."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when artwork was first saved."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when artwork was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "title",
+        "imageDataUrl",
+        "width",
+        "height",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SharedArtwork": {
+      "title": "SharedArtwork",
+      "description": "A publicly shared MoonArt drawing visible to all authenticated users for 24 hours.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the creator."
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Public display name of the author (no email or PII)."
+        },
+        "authorPhotoUrl": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional public avatar URL of the author."
+        },
+        "sourceArtworkId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Identifier linking back to the author's gallery item or canvas document."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Public title of the shared artwork."
+        },
+        "imageDataUrl": {
+          "type": "string",
+          "minLength": 22,
+          "maxLength": 750000,
+          "description": "Compressed image data URL of the shared artwork."
+        },
+        "width": {
+          "type": "integer",
+          "description": "Canvas width in pixels."
+        },
+        "height": {
+          "type": "integer",
+          "description": "Canvas height in pixels."
+        },
+        "heartCount": {
+          "type": "integer",
+          "description": "Total hearts collected for the current editRevision; resets to 0 on owner edit."
+        },
+        "editRevision": {
+          "type": "integer",
+          "description": "Monotonically increasing revision counter incremented whenever the owner edits the shared artwork."
+        },
+        "sharedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the artwork was shared."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the shared artwork was last modified."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Expiration timestamp exactly 24 hours after sharing."
+        }
+      },
+      "required": [
+        "ownerId",
+        "authorName",
+        "authorPhotoUrl",
+        "sourceArtworkId",
+        "title",
+        "imageDataUrl",
+        "width",
+        "height",
+        "heartCount",
+        "editRevision",
+        "sharedAt",
+        "updatedAt",
+        "expiresAt"
+      ]
+    },
+    "ArtworkLike": {
+      "title": "ArtworkLike",
+      "description": "Represents a single verified user heart on a specific editRevision of a shared artwork.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the user who hearted the artwork."
+        },
+        "artworkId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent sharedArtwork document ID."
+        },
+        "editRevision": {
+          "type": "integer",
+          "description": "Revision number of the shared artwork that was hearted."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the heart was recorded."
+        }
+      },
+      "required": [
+        "userId",
+        "artworkId",
+        "editRevision",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/artworks/{artworkId}": {
+      "schema": {
+        "$ref": "#/entities/UserArtwork"
+      },
+      "description": "Private personal artwork gallery scoped strictly to each authenticated user."
+    },
+    "/sharedArtworks/{artworkId}": {
+      "schema": {
+        "$ref": "#/entities/SharedArtwork"
+      },
+      "description": "Public 24-hour shared artwork feed visible to authenticated users while non-expired."
+    },
+    "/sharedArtworks/{artworkId}/likes/{likeId}": {
+      "schema": {
+        "$ref": "#/entities/ArtworkLike"
+      },
+      "description": "Atomic per-user per-revision heart records enforcing 1 heart per user per revision."
+    }
+  }
+}

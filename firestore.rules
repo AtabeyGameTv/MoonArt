@@ -1,0 +1,279 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Default-deny global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Entity Validation Blueprint: UserArtwork (matches firebase-blueprint.json)
+    function isValidUserArtwork(data, userId) {
+      return data.keys().hasAll(['ownerId', 'title', 'imageDataUrl', 'width', 'height', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'title', 'imageDataUrl', 'width', 'height', 'createdAt', 'updatedAt'])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 80
+        && data.imageDataUrl is string
+        && data.imageDataUrl.size() >= 22
+        && data.imageDataUrl.size() <= 750000
+        && data.width is int
+        && data.width >= 16
+        && data.width <= 8192
+        && data.height is int
+        && data.height >= 16
+        && data.height <= 8192
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Validation Blueprint: SharedArtwork (matches firebase-blueprint.json)
+    function isValidSharedArtwork(data) {
+      return data.keys().hasAll([
+          'ownerId', 'authorName', 'authorPhotoUrl', 'sourceArtworkId',
+          'title', 'imageDataUrl', 'width', 'height',
+          'heartCount', 'editRevision', 'sharedAt', 'updatedAt', 'expiresAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'authorName', 'authorPhotoUrl', 'sourceArtworkId',
+          'title', 'imageDataUrl', 'width', 'height',
+          'heartCount', 'editRevision', 'sharedAt', 'updatedAt', 'expiresAt'
+        ])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.authorName is string
+        && data.authorName.size() >= 1
+        && data.authorName.size() <= 80
+        && data.authorPhotoUrl is string
+        && data.authorPhotoUrl.size() <= 512
+        && data.sourceArtworkId is string
+        && isValidId(data.sourceArtworkId)
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 80
+        && data.imageDataUrl is string
+        && data.imageDataUrl.size() >= 22
+        && data.imageDataUrl.size() <= 750000
+        && data.width is int
+        && data.width >= 16
+        && data.width <= 8192
+        && data.height is int
+        && data.height >= 16
+        && data.height <= 8192
+        && data.heartCount is int
+        && data.heartCount >= 0
+        && data.heartCount <= 10000000
+        && data.editRevision is int
+        && data.editRevision >= 0
+        && data.editRevision <= 1000000
+        && data.sharedAt is timestamp
+        && data.updatedAt is timestamp
+        && data.expiresAt is timestamp;
+    }
+
+    // Entity Validation Blueprint: ArtworkLike (matches firebase-blueprint.json)
+    function isValidArtworkLike(data, artworkId) {
+      return data.keys().hasAll(['userId', 'artworkId', 'editRevision', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'artworkId', 'editRevision', 'createdAt'])
+        && data.userId is string
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.artworkId is string
+        && isValidId(data.artworkId)
+        && data.artworkId == artworkId
+        && data.editRevision is int
+        && data.editRevision >= 0
+        && data.editRevision <= 1000000
+        && data.createdAt is timestamp;
+    }
+
+    // 1. Personal User Gallery: Strictly isolated per user
+    match /users/{userId}/artworks/{artworkId} {
+      allow get: if isSignedIn()
+        && isValidId(userId)
+        && isValidId(artworkId)
+        && isOwner(userId)
+        && existing().ownerId == request.auth.uid;
+
+      allow list: if isSignedIn()
+        && isValidId(userId)
+        && isOwner(userId)
+        && resource.data.ownerId == request.auth.uid;
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidId(artworkId)
+        && isOwner(userId)
+        && isValidUserArtwork(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidId(artworkId)
+        && isOwner(userId)
+        && isValidUserArtwork(incoming(), userId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'imageDataUrl', 'width', 'height', 'updatedAt']);
+
+      allow delete: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidId(artworkId)
+        && isOwner(userId)
+        && existing().ownerId == request.auth.uid;
+    }
+
+    // 2. Public 24-Hour Shared Artworks Feed
+    match /sharedArtworks/{artworkId} {
+      function currentLikePath() {
+        return /databases/$(database)/documents/sharedArtworks/$(artworkId)/likes/$(request.auth.uid + '_' + string(existing().editRevision));
+      }
+
+      function isOwnerEditAction() {
+        return existing().ownerId == request.auth.uid
+          && incoming().ownerId == request.auth.uid
+          && incoming().ownerId == existing().ownerId
+          && incoming().authorName == existing().authorName
+          && incoming().authorPhotoUrl == existing().authorPhotoUrl
+          && incoming().sourceArtworkId == existing().sourceArtworkId
+          && incoming().sharedAt == existing().sharedAt
+          && incoming().expiresAt == existing().expiresAt
+          && existing().expiresAt > request.time
+          && incoming().updatedAt == request.time
+          && incoming().heartCount == 0
+          && incoming().editRevision == existing().editRevision + 1;
+      }
+
+      function isToggleHeartAction() {
+        return existing().expiresAt > request.time
+          && incoming().ownerId == existing().ownerId
+          && incoming().authorName == existing().authorName
+          && incoming().authorPhotoUrl == existing().authorPhotoUrl
+          && incoming().sourceArtworkId == existing().sourceArtworkId
+          && incoming().title == existing().title
+          && incoming().imageDataUrl == existing().imageDataUrl
+          && incoming().width == existing().width
+          && incoming().height == existing().height
+          && incoming().editRevision == existing().editRevision
+          && incoming().sharedAt == existing().sharedAt
+          && incoming().updatedAt == existing().updatedAt
+          && incoming().expiresAt == existing().expiresAt
+          && (
+            (
+              incoming().heartCount == existing().heartCount + 1
+              && !exists(currentLikePath())
+              && existsAfter(currentLikePath())
+            )
+            || (
+              incoming().heartCount == existing().heartCount - 1
+              && exists(currentLikePath())
+              && !existsAfter(currentLikePath())
+            )
+          );
+      }
+
+      allow get: if isSignedIn()
+        && isValidId(artworkId)
+        && (existing().expiresAt > request.time || existing().ownerId == request.auth.uid);
+
+      allow list: if isSignedIn()
+        && (resource.data.expiresAt > request.time - duration.value(5, 'm') || resource.data.ownerId == request.auth.uid);
+
+      allow create: if isVerifiedUser()
+        && isValidId(artworkId)
+        && isValidSharedArtwork(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().heartCount == 0
+        && incoming().editRevision == 0
+        && incoming().sharedAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().expiresAt > request.time
+        && incoming().expiresAt <= request.time + duration.value(24, 'h') + duration.value(2, 'm');
+
+      allow update: if isVerifiedUser()
+        && isValidId(artworkId)
+        && isValidSharedArtwork(incoming())
+        && (
+          (isOwnerEditAction() && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'imageDataUrl', 'width', 'height', 'updatedAt', 'heartCount', 'editRevision']))
+          || (isToggleHeartAction() && incoming().diff(existing()).affectedKeys().hasOnly(['heartCount']))
+        );
+
+      allow delete: if isVerifiedUser()
+        && isValidId(artworkId)
+        && existing().ownerId == request.auth.uid;
+
+      // 3. Atomic Per-Revision Likes Subcollection
+      match /likes/{likeId} {
+        allow get: if isSignedIn()
+          && isValidId(artworkId)
+          && isValidId(likeId)
+          && exists(/databases/$(database)/documents/sharedArtworks/$(artworkId))
+          && (
+            (
+              resource == null
+              && likeId == (request.auth.uid + '_' + string(get(/databases/$(database)/documents/sharedArtworks/$(artworkId)).data.editRevision))
+            )
+            || (resource != null && existing().userId == request.auth.uid)
+          );
+
+        allow list: if isSignedIn()
+          && resource.data.userId == request.auth.uid;
+
+        allow create: if isVerifiedUser()
+          && isValidId(artworkId)
+          && isValidId(likeId)
+          && isValidArtworkLike(incoming(), artworkId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/sharedArtworks/$(artworkId))
+          && get(/databases/$(database)/documents/sharedArtworks/$(artworkId)).data.expiresAt > request.time
+          && incoming().editRevision == get(/databases/$(database)/documents/sharedArtworks/$(artworkId)).data.editRevision
+          && likeId == (request.auth.uid + '_' + string(incoming().editRevision))
+          && getAfter(/databases/$(database)/documents/sharedArtworks/$(artworkId)).data.heartCount
+             == get(/databases/$(database)/documents/sharedArtworks/$(artworkId)).data.heartCount + 1;
+
+        allow update: if false;
+
+        allow delete: if isVerifiedUser()
+          && isValidId(artworkId)
+          && isValidId(likeId)
+          && existing().userId == request.auth.uid
+          && exists(/databases/$(database)/documents/sharedArtworks/$(artworkId))
+          && get(/databases/$(database)/documents/sharedArtworks/$(artworkId)).data.expiresAt > request.time
+          && existing().editRevision == get(/databases/$(database)/documents/sharedArtworks/$(artworkId)).data.editRevision
+          && getAfter(/databases/$(database)/documents/sharedArtworks/$(artworkId)).data.heartCount
+             == get(/databases/$(database)/documents/sharedArtworks/$(artworkId)).data.heartCount - 1;
+      }
+    }
+  }
+}
